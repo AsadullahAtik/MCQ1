@@ -1,0 +1,55 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:        # "Run workflow" button in the Actions tab
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # The repo holds only lib/, test/, pubspec.yaml. Generate the android/ project once, on the build machine.
+      - name: Create the Android project if it is not committed
+        run: |
+          if [ ! -d android ]; then flutter create . --platforms=android --org com.livemcq; fi
+          # flutter create adds a sample counter-app test that cannot match this app: remove it
+          rm -f test/widget_test.dart
+          # release builds need the INTERNET permission declared (debug builds get it automatically)
+          if ! grep -q "android.permission.INTERNET" android/app/src/main/AndroidManifest.xml; then
+            sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+          fi
+
+      # A plain http:// address (a server on your own PC) is blocked by Android unless the app allows cleartext traffic.
+      # With an https:// API_URL this step does nothing.
+      - name: Allow http for local testing
+        if: startsWith(vars.API_URL, 'http://')
+        run: sed -i 's#<application#<application android:usesCleartextTraffic="true"#' android/app/src/main/AndroidManifest.xml
+
+      - run: flutter pub get
+
+      # Do not stop the build on these two: read their output in the log, fix, push again.
+      - run: flutter analyze
+        continue-on-error: true
+      - run: flutter test
+        continue-on-error: true
+
+      - name: Build release APK
+        run: flutter build apk --release --dart-define=API_URL=${{ vars.API_URL }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: livemcq-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
